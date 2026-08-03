@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Feed</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #1a1d24;
+    --accent: #4f9dff;
+    --accent-off: #ff5c5c;
+    --text: #e8eaed;
+    --text-dim: #8a8f98;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+  }
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .status-line {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-dim);
+  }
+  .dot.live {
+    background: #3ecf6a;
+    box-shadow: 0 0 8px #3ecf6a;
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .feed-wrap {
+    position: relative;
+    width: min(92vw, 720px);
+    aspect-ratio: 4 / 3;
+    background: var(--panel);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: none;
+  }
+  .placeholder {
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    text-align: center;
+    padding: 0 20px;
+  }
+  .badge {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    background: rgba(0,0,0,0.55);
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    display: none;
+    align-items: center;
+    gap: 6px;
+  }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 24px;
+  }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 12px 18px;
+    border-radius: 10px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:hover { opacity: 0.9; }
+  button:active { transform: scale(0.97); }
+  button.secondary {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid #333;
+  }
+  button.stop {
+    background: var(--accent-off);
+  }
+  button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  #snapshotOut {
+    margin-top: 20px;
+    width: min(92vw, 720px);
+    display: none;
+  }
+  #snapshotOut img {
+    width: 100%;
+    border-radius: 12px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+  }
+  .timestamp {
+    text-align: center;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-top: 8px;
+  }
+  .hint {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    margin-top: 20px;
+    text-align: center;
+    max-width: 480px;
+  }
+</style>
+</head>
+<body>
+
+  <h1>Live Feed</h1>
+  <div class="status-line">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusText">Camera off</span>
+  </div>
+
+  <div class="feed-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="placeholder" id="placeholder">Tap "Start Feed" to turn on your camera.</div>
+    <div class="badge" id="liveBadge"><span class="dot live"></span> LIVE</div>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn">Start Feed</button>
+    <button id="stopBtn" class="stop" disabled>Stop Feed</button>
+    <button id="switchBtn" class="secondary" disabled>Switch Camera</button>
+    <button id="snapBtn" class="secondary" disabled>Take Snapshot</button>
+  </div>
+
+  <div id="snapshotOut">
+    <img id="snapImg" alt="Snapshot">
+    <div class="timestamp" id="snapTime"></div>
+  </div>
+
+  <div class="hint">Runs entirely in your browser — nothing is uploaded anywhere. Requires camera permission.</div>
+
+<script>
+  const video = document.getElementById('video');
+  const placeholder = document.getElementById('placeholder');
+  const liveBadge = document.getElementById('liveBadge');
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const switchBtn = document.getElementById('switchBtn');
+  const snapBtn = document.getElementById('snapBtn');
+  const snapshotOut = document.getElementById('snapshotOut');
+  const snapImg = document.getElementById('snapImg');
+  const snapTime = document.getElementById('snapTime');
+
+  let currentStream = null;
+  // Default to the rear camera, since this is meant to run on a phone.
+  let facingMode = 'environment';
+
+  async function startFeed() {
+    try {
+      statusText.textContent = 'Requesting camera access…';
+      const constraints = { video: { facingMode }, audio: false };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      currentStream = stream;
+      video.srcObject = stream;
+      video.style.display = 'block';
+      placeholder.style.display = 'none';
+      liveBadge.style.display = 'flex';
+      statusDot.classList.add('live');
+      statusText.textContent = 'Live';
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      switchBtn.disabled = false;
+      snapBtn.disabled = false;
+    } catch (err) {
+      statusText.textContent = 'Camera access failed: ' + err.message;
+      placeholder.textContent = 'Could not access camera. Check browser permissions and try again.';
+    }
+  }
+
+  function stopFeed() {
+    if (currentStream) {
+      currentStream.getTracks().forEach(track => track.stop());
+      currentStream = null;
+    }
+    video.srcObject = null;
+    video.style.display = 'none';
+    placeholder.style.display = 'block';
+    placeholder.textContent = 'Tap "Start Feed" to turn on your camera.';
+    liveBadge.style.display = 'none';
+    statusDot.classList.remove('live');
+    statusText.textContent = 'Camera off';
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    switchBtn.disabled = true;
+    snapBtn.disabled = true;
+  }
+
+  async function switchCamera() {
+    facingMode = facingMode === 'user' ? 'environment' : 'user';
+    stopFeed();
+    // small delay to fully release the previous device before requesting again
+    setTimeout(startFeed, 200);
+  }
+
+  function takeSnapshot() {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    snapImg.src = canvas.toDataURL('image/png');
+    snapTime.textContent = 'Captured ' + new Date().toLocaleString();
+    snapshotOut.style.display = 'block';
+  }
+
+  startBtn.addEventListener('click', startFeed);
+  stopBtn.addEventListener('click', stopFeed);
+  switchBtn.addEventListener('click', switchCamera);
+  snapBtn.addEventListener('click', takeSnapshot);
+
+  window.addEventListener('beforeunload', () => {
+    if (currentStream) currentStream.getTracks().forEach(track => track.stop());
+  });
+</script>
+
+</body>
+</html>
